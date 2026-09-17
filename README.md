@@ -2,7 +2,7 @@
 
 Panel scoring for model-versus-trial comparison. This package implements the
 procedure recommended in `../../docs/tost-critique.pdf`. We replace a single
-standardised distance and a pass bit with four things.
+standardized distance and a pass bit with four things.
 
 **R1, the panel.** A set of named quantities, each scored against a margin in
 its own units, all of them required to pass. That is an intersection-union
@@ -146,7 +146,7 @@ campaign is a matter of replacing that one file, and nothing else.
 ## What remains open
 
 - The margins are ours, not the program's. R3 says what a margin *could* be; it
-  does not say what it *should* be. Those numbers want agreeing with the
+  does not say what it *should* be. Those numbers want to agree with the
   evaluator before the next campaign.
 - Latency is not covered. The per-run performance metrics carry integrity,
   goodput and availability. The latency tree is a separate corpus and would need
