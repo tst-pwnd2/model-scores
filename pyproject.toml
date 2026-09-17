@@ -1,0 +1,41 @@
+[project]
+name = "model-scores"
+version = "1.0.0"
+description = "Panel scoring for model-versus-trial comparison, the replacement for the CP3 TOST construction."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Proprietary" }
+authors = [{ name = "Tom Reynolds", email = "thomas.nelson.reynolds@gmail.com" }]
+keywords = ["equivalence", "bootstrap", "intersection-union", "model-validation"]
+dependencies = ["numpy>=1.24"]
+
+[project.optional-dependencies]
+# Figures only. The scoring itself stays numpy-only.
+plots = ["matplotlib>=3.7"]
+
+[project.scripts]
+model-scores = "model_scores.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/model_scores"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/model_scores", "tests", "README.md", "pyproject.toml"]
+
+[dependency-groups]
+dev = ["pytest>=8.0", "ruff>=0.6"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
