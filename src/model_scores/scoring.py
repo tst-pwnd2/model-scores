@@ -21,7 +21,75 @@ from .quantities import DEFAULT_PANEL, Panel, Quantity
 from .results import Interval, PairResult, QuantityResult
 from .verdicts import FAIL, NO_MARGIN, NOT_CERTIFIABLE, ORDER, PASS, worst
 
-__all__ = ["difference_interval", "classify", "score", "score_all", "tally", "summary"]
+__all__ = ["difference_interval", "classify", "score", "score_all", "tally", "summary",
+           "has_relative_margin", "absolute_for", "scope_matches", "MIN_REFERENCE",
+           "MIN_MODEL", "DEFAULT_ZERO_GUARD"]
+
+#: How close to zero the reference statistic may sit, in standard errors of the
+#: reference mean, before a relative margin stops meaning anything.
+DEFAULT_ZERO_GUARD = 5.0
+
+#: A pair thinner than this on either side resolves nothing, so we do not score
+#: it: the result would describe the sample size rather than the model.
+MIN_REFERENCE = 30
+MIN_MODEL = 8
+
+
+def has_relative_margin(reference: np.ndarray, zero_guard: float = DEFAULT_ZERO_GUARD) -> bool:
+    """Whether a relative margin is meaningful for this reference sample.
+
+    Lives here, and is used both by :func:`score` and by the callers that want
+    the answer without a model, so that the two cannot drift apart.
+    """
+    reference = clean(reference)
+    if reference.size < 2:
+        return False
+    se_mean = reference.std(ddof=1) / math.sqrt(reference.size)
+    return abs(reference.mean()) >= zero_guard * se_mean
+
+
+def scope_matches(scope: str, key: Sequence) -> bool:
+    """Whether a dotted scope selects this key.
+
+    A scope is matched segment by segment against the key, which is
+    ``(metric, series, mode, window)``. ``*`` matches one segment and a scope
+    shorter than the key matches on its prefix, so ``integrity`` takes every
+    integrity pair and ``integrity.*.independent`` takes only the independent
+    ones. A bare ``*`` takes everything.
+    """
+    if scope == "*":
+        return True
+    parts = scope.split(".")
+    if len(parts) > len(key):
+        return False
+    # strict=False on purpose: a short scope is a prefix, which is the point.
+    return all(p == "*" or p == str(k) for p, k in zip(parts, key, strict=False))
+
+
+def specificity(scope: str) -> tuple[int, int]:
+    """How particular a scope is: named segments first, then length."""
+    if scope == "*":
+        return (0, 0)
+    parts = scope.split(".")
+    return (sum(1 for p in parts if p != "*"), len(parts))
+
+
+def absolute_for(key: Sequence, table: dict[str, dict[str, float]] | None) -> dict[str, float]:
+    """The absolute margins that apply to one key.
+
+    Every matching scope contributes, least particular first, so a general
+    statement can be narrowed by a particular one. Scoping matters more than it
+    looks: the same metric name covers a cumulative series sitting near one and
+    an independent series sitting at zero, and a tolerance in units that suits
+    the second is a far stricter test on the first.
+    """
+    if not table:
+        return {}
+    merged: dict[str, float] = {}
+    for scope in sorted(table, key=specificity):
+        if scope_matches(scope, key):
+            merged.update(table[scope])
+    return merged
 
 
 def difference_interval(reference: np.ndarray, model: np.ndarray, quantity: Quantity,
@@ -53,7 +121,7 @@ def score(reference, model, panel: Panel = DEFAULT_PANEL, margin: float = 0.10,
           absolute_margins: dict[str, float] | None = None,
           key: tuple = (), alpha: float = DEFAULT_ALPHA,
           reps: int = DEFAULT_BOOTSTRAP, seed=DEFAULT_SEED,
-          zero_guard: float = 5.0, kl_bins: int = DEFAULT_KL_BINS,
+          zero_guard: float = DEFAULT_ZERO_GUARD, kl_bins: int = DEFAULT_KL_BINS,
           log_bins: bool = False, diagnostics: bool = True) -> PairResult:
     """Score one model sample against one reference sample on a panel.
 
@@ -77,9 +145,7 @@ def score(reference, model, panel: Panel = DEFAULT_PANEL, margin: float = 0.10,
         raise ValueError(f"{key or 'pair'}: empty sample after removing non-finite values")
 
     absolute_margins = absolute_margins or {}
-    se_mean = (reference.std(ddof=1) / math.sqrt(reference.size)
-               if reference.size > 1 else 0.0)
-    near_zero = abs(reference.mean()) < zero_guard * se_mean
+    near_zero = not has_relative_margin(reference, zero_guard)
 
     result = PairResult(key=key, n_reference=int(reference.size),
                         n_model=int(model.size), near_zero=bool(near_zero))
@@ -95,7 +161,10 @@ def score(reference, model, panel: Panel = DEFAULT_PANEL, margin: float = 0.10,
                     None, None, NO_MARGIN)
                 continue
             delta = margin * abs(base)
-        relative = interval.scaled(abs(base)) if abs(base) > 1e-300 else None
+        # A near-zero base makes a relative reading meaningless, which is the
+        # whole reason the pair needed an absolute margin. Do not offer one.
+        relative = (interval.scaled(abs(base))
+                    if abs(base) > 1e-300 and not near_zero else None)
         result.quantities[quantity.name] = QuantityResult(
             quantity.name, base, float(quantity(model, None)), interval, relative,
             float(delta), classify(interval, float(delta)))
@@ -114,18 +183,26 @@ def score(reference, model, panel: Panel = DEFAULT_PANEL, margin: float = 0.10,
 
 def score_all(reference: dict[tuple, np.ndarray], model: dict[tuple, np.ndarray],
               panel: Panel = DEFAULT_PANEL, margin: float = 0.10,
-              min_reference: int = 30, min_model: int = 8, **kw) -> list[PairResult]:
+              min_reference: int = MIN_REFERENCE, min_model: int = MIN_MODEL,
+              absolute: dict[str, dict[str, float]] | None = None,
+              **kw) -> list[PairResult]:
     """Score every key both mappings carry.
 
     We skip a key that is too thin on either side, since a handful of runs resolves
     nothing and would only add pairs that are, by construction, not certifiable.
+
+    ``absolute`` carries margins stated in a metric's own units, keyed by a
+    dotted scope over the key and then by quantity. Those are what a pair whose
+    reference statistic sits at zero needs, and they have to come from the
+    program rather than from the reference's own spread.
     """
     out = []
     for key in sorted(set(reference) & set(model)):
         r, m = clean(reference[key]), clean(model[key])
         if r.size < min_reference or m.size < min_model:
             continue
-        out.append(score(r, m, panel, margin, key=key, **kw))
+        out.append(score(r, m, panel, margin, key=key,
+                         absolute_margins=absolute_for(key, absolute), **kw))
     return out
 
 
@@ -158,7 +235,9 @@ def summary(results: Sequence[PairResult]) -> str:
         for r in sorted(scored, key=lambda x: -x.kl_excess)[:10]:
             lines.append(f"    {r.kl_excess:+7.3f}  {r.label:<58s}  {r.verdict}")
 
-    have = [r for r in results if r.has_margin]
+    # A relative summary of a pair whose reference sits at zero would be the
+    # nonsense this procedure declines to produce, absolute margin or not.
+    have = [r for r in results if r.has_margin and not r.near_zero]
     if have:
         first = results[0].quantities and next(iter(results[0].quantities))
         margins = np.array([r[first].relative_certifiable_margin for r in have

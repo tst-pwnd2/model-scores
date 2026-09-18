@@ -5,7 +5,7 @@ description = "Panel scoring for model-versus-trial comparison, the replacement 
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Proprietary" }
-authors = [{ name = "Tom Reynolds", email = "thomas.reynolds@twosixtech.com" }]
+authors = [{ name = "Tom Reynolds", email = "thomas.nelson.reynolds@gmail.com" }]
 keywords = ["equivalence", "bootstrap", "intersection-union", "model-validation"]
 dependencies = ["numpy>=1.24"]
 
